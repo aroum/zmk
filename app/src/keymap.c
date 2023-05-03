@@ -4,22 +4,15 @@
  * SPDX-License-Identifier: MIT
  */
 
-#include <drivers/behavior.h>
-#include <zephyr/sys/util.h>
-#include <zephyr/bluetooth/bluetooth.h>
-#include <zephyr/logging/log.h>
+#include <sys/util.h>
+#include <logging/log.h>
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
-#include <zmk/behavior.h>
-#include <zmk/keymap.h>
 #include <zmk/matrix.h>
 #include <zmk/sensors.h>
-#include <zmk/virtual_key_position.h>
-
-#include <zmk/ble.h>
-#if ZMK_BLE_IS_CENTRAL
-#include <zmk/split/bluetooth/central.h>
-#endif
+#include <zmk/keymap.h>
+#include <drivers/behavior.h>
+#include <zmk/behavior.h>
 
 #include <zmk/event_manager.h>
 #include <zmk/events/position_state_changed.h>
@@ -35,31 +28,30 @@ static uint8_t _zmk_keymap_layer_default = 0;
 #define ZMK_KEYMAP_NODE DT_DRV_INST(0)
 #define ZMK_KEYMAP_LAYERS_LEN (DT_INST_FOREACH_CHILD(0, LAYER_CHILD_LEN) 0)
 
-#define BINDING_WITH_COMMA(idx, drv_inst) ZMK_KEYMAP_EXTRACT_BINDING(idx, drv_inst)
+#define BINDING_WITH_COMMA(idx, drv_inst) ZMK_KEYMAP_EXTRACT_BINDING(idx, drv_inst),
 
 #define TRANSFORMED_LAYER(node)                                                                    \
-    {LISTIFY(DT_PROP_LEN(node, bindings), BINDING_WITH_COMMA, (, ), node)},
+    {UTIL_LISTIFY(DT_PROP_LEN(node, bindings), BINDING_WITH_COMMA, node)},
 
 #if ZMK_KEYMAP_HAS_SENSORS
 #define _TRANSFORM_SENSOR_ENTRY(idx, layer)                                                        \
     {                                                                                              \
-        .behavior_dev = DT_PROP(DT_PHANDLE_BY_IDX(layer, sensor_bindings, idx), label),            \
+        .behavior_dev = DT_LABEL(DT_PHANDLE_BY_IDX(layer, sensor_bindings, idx)),                  \
         .param1 = COND_CODE_0(DT_PHA_HAS_CELL_AT_IDX(layer, sensor_bindings, idx, param1), (0),    \
                               (DT_PHA_BY_IDX(layer, sensor_bindings, idx, param1))),               \
         .param2 = COND_CODE_0(DT_PHA_HAS_CELL_AT_IDX(layer, sensor_bindings, idx, param2), (0),    \
                               (DT_PHA_BY_IDX(layer, sensor_bindings, idx, param2))),               \
-    }
+    },
 
 #define SENSOR_LAYER(node)                                                                         \
     COND_CODE_1(                                                                                   \
         DT_NODE_HAS_PROP(node, sensor_bindings),                                                   \
-        ({LISTIFY(DT_PROP_LEN(node, sensor_bindings), _TRANSFORM_SENSOR_ENTRY, (, ), node)}),      \
+        ({UTIL_LISTIFY(DT_PROP_LEN(node, sensor_bindings), _TRANSFORM_SENSOR_ENTRY, node)}),       \
         ({})),
 
 #endif /* ZMK_KEYMAP_HAS_SENSORS */
 
-#define LAYER_LABEL(node)                                                                          \
-    COND_CODE_0(DT_NODE_HAS_PROP(node, label), (NULL), (DT_PROP(node, label))),
+#define LAYER_LABEL(node) COND_CODE_0(DT_NODE_HAS_PROP(node, label), (NULL), (DT_LABEL(node))),
 
 // State
 
@@ -160,17 +152,7 @@ const char *zmk_keymap_layer_label(uint8_t layer) {
     return zmk_keymap_layer_names[layer];
 }
 
-int invoke_locally(struct zmk_behavior_binding *binding, struct zmk_behavior_binding_event event,
-                   bool pressed) {
-    if (pressed) {
-        return behavior_keymap_binding_pressed(binding, event);
-    } else {
-        return behavior_keymap_binding_released(binding, event);
-    }
-}
-
-int zmk_keymap_apply_position_state(uint8_t source, int layer, uint32_t position, bool pressed,
-                                    int64_t timestamp) {
+int zmk_keymap_apply_position_state(int layer, uint32_t position, bool pressed, int64_t timestamp) {
     // We want to make a copy of this, since it may be converted from
     // relative to absolute before being invoked
     struct zmk_behavior_binding binding = zmk_keymap[layer][position];
@@ -181,12 +163,13 @@ int zmk_keymap_apply_position_state(uint8_t source, int layer, uint32_t position
         .timestamp = timestamp,
     };
 
-    LOG_DBG("layer: %d position: %d, binding name: %s", layer, position, binding.behavior_dev);
+    LOG_DBG("layer: %d position: %d, binding name: %s", layer, position,
+            log_strdup(binding.behavior_dev));
 
     behavior = device_get_binding(binding.behavior_dev);
 
     if (!behavior) {
-        LOG_WRN("No behavior assigned to %d on layer %d", position, layer);
+        LOG_DBG("No behavior assigned to %d on layer %d", position, layer);
         return 1;
     }
 
@@ -196,46 +179,20 @@ int zmk_keymap_apply_position_state(uint8_t source, int layer, uint32_t position
         return err;
     }
 
-    enum behavior_locality locality = BEHAVIOR_LOCALITY_CENTRAL;
-    err = behavior_get_locality(behavior, &locality);
-    if (err) {
-        LOG_ERR("Failed to get behavior locality %d", err);
-        return err;
+    if (pressed) {
+        return behavior_keymap_binding_pressed(&binding, event);
+    } else {
+        return behavior_keymap_binding_released(&binding, event);
     }
-
-    switch (locality) {
-    case BEHAVIOR_LOCALITY_CENTRAL:
-        return invoke_locally(&binding, event, pressed);
-    case BEHAVIOR_LOCALITY_EVENT_SOURCE:
-#if ZMK_BLE_IS_CENTRAL
-        if (source == ZMK_POSITION_STATE_CHANGE_SOURCE_LOCAL) {
-            return invoke_locally(&binding, event, pressed);
-        } else {
-            return zmk_split_bt_invoke_behavior(source, &binding, event, pressed);
-        }
-#else
-        return invoke_locally(&binding, event, pressed);
-#endif
-    case BEHAVIOR_LOCALITY_GLOBAL:
-#if ZMK_BLE_IS_CENTRAL
-        for (int i = 0; i < ZMK_BLE_SPLIT_PERIPHERAL_COUNT; i++) {
-            zmk_split_bt_invoke_behavior(i, &binding, event, pressed);
-        }
-#endif
-        return invoke_locally(&binding, event, pressed);
-    }
-
-    return -ENOTSUP;
 }
 
-int zmk_keymap_position_state_changed(uint8_t source, uint32_t position, bool pressed,
-                                      int64_t timestamp) {
+int zmk_keymap_position_state_changed(uint32_t position, bool pressed, int64_t timestamp) {
     if (pressed) {
         zmk_keymap_active_behavior_layer[position] = _zmk_keymap_layer_state;
     }
     for (int layer = ZMK_KEYMAP_LAYERS_LEN - 1; layer >= _zmk_keymap_layer_default; layer--) {
         if (zmk_keymap_layer_active_with_state(layer, zmk_keymap_active_behavior_layer[position])) {
-            int ret = zmk_keymap_apply_position_state(source, layer, position, pressed, timestamp);
+            int ret = zmk_keymap_apply_position_state(layer, position, pressed, timestamp);
             if (ret > 0) {
                 LOG_DBG("behavior processing to continue to next layer");
                 continue;
@@ -252,16 +209,16 @@ int zmk_keymap_position_state_changed(uint8_t source, uint32_t position, bool pr
 }
 
 #if ZMK_KEYMAP_HAS_SENSORS
-int zmk_keymap_sensor_triggered(uint8_t sensor_number, const struct device *sensor,
+int zmk_keymap_sensor_triggered(uint8_t sensor_number, const struct sensor_value value,
                                 int64_t timestamp) {
     for (int layer = ZMK_KEYMAP_LAYERS_LEN - 1; layer >= _zmk_keymap_layer_default; layer--) {
-        if (zmk_keymap_layer_active(layer)) {
+        if (zmk_keymap_layer_active(layer) && zmk_sensor_keymap[layer] != NULL) {
             struct zmk_behavior_binding *binding = &zmk_sensor_keymap[layer][sensor_number];
             const struct device *behavior;
             int ret;
 
             LOG_DBG("layer: %d sensor_number: %d, binding name: %s", layer, sensor_number,
-                    binding->behavior_dev);
+                    log_strdup(binding->behavior_dev));
 
             behavior = device_get_binding(binding->behavior_dev);
 
@@ -270,9 +227,7 @@ int zmk_keymap_sensor_triggered(uint8_t sensor_number, const struct device *sens
                 continue;
             }
 
-            struct zmk_behavior_binding_event event = {
-                .position = ZMK_VIRTUAL_KEY_POSITION_SENSOR(sensor_number), .timestamp = timestamp};
-            ret = behavior_sensor_keymap_binding_triggered(binding, sensor, event);
+            ret = behavior_sensor_keymap_binding_triggered(binding, value, timestamp);
 
             if (ret > 0) {
                 LOG_DBG("behavior processing to continue to next layer");
@@ -294,14 +249,14 @@ int zmk_keymap_sensor_triggered(uint8_t sensor_number, const struct device *sens
 int keymap_listener(const zmk_event_t *eh) {
     const struct zmk_position_state_changed *pos_ev;
     if ((pos_ev = as_zmk_position_state_changed(eh)) != NULL) {
-        return zmk_keymap_position_state_changed(pos_ev->source, pos_ev->position, pos_ev->state,
+        return zmk_keymap_position_state_changed(pos_ev->position, pos_ev->state,
                                                  pos_ev->timestamp);
     }
 
 #if ZMK_KEYMAP_HAS_SENSORS
     const struct zmk_sensor_event *sensor_ev;
     if ((sensor_ev = as_zmk_sensor_event(eh)) != NULL) {
-        return zmk_keymap_sensor_triggered(sensor_ev->sensor_number, sensor_ev->sensor,
+        return zmk_keymap_sensor_triggered(sensor_ev->sensor_number, sensor_ev->value,
                                            sensor_ev->timestamp);
     }
 #endif /* ZMK_KEYMAP_HAS_SENSORS */

@@ -37,22 +37,13 @@ export const zmkBase = {
  */
 export const zmkBoards = {
   "nice!nano": {
-    name: "nice!nano v1",
+    name: "nice!nano",
     powerSupply: {
       type: "LDO",
       outputVoltage: 3.3,
       quiescentMicroA: 55,
     },
     otherQuiescentMicroA: 4,
-  },
-  "nice!nano v2": {
-    name: "nice!nano v2",
-    powerSupply: {
-      type: "LDO",
-      outputVoltage: 3.3,
-      quiescentMicroA: 15,
-    },
-    otherQuiescentMicroA: 3,
   },
   "nice!60": {
     powerSupply: {
@@ -71,18 +62,6 @@ export const underglowPower = {
   ledOff: 460, // Quiescent current of a WS2812B
 };
 
-export const backlightLEDs = {
-  White: 3.2,
-  Blue: 3.0,
-  Green: 2.2,
-  Yellow: 2.1,
-  Red: 1.8,
-};
-
-export const backlightPower = {
-  pwmPower: 510, // Estimated power consumption of PWM module
-};
-
 export const displayPower = {
   // Based on GoodDisplay's 1.02in epaper
   EPAPER: {
@@ -95,11 +74,5 @@ export const displayPower = {
     activePercent: 0.5, // Estimated sleeping half the time (based on idle)
     active: 10000, // Estimated power draw when about half the pixels are on
     sleep: 7, // Deep sleep power draw (display off)
-  },
-  // Based on the nice!view using Sharp's LS011B7DH01
-  NICEVIEW: {
-    activePercent: 0.01, // Estimated two refreshes per second taking five milliseconds each
-    active: 1425, // Power draw during refresh (225uA display + 1200uA SPIM)
-    sleep: 1, // Idle power draw of the display
   },
 };

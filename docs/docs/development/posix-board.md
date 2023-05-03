@@ -21,18 +21,18 @@ apt install -y gcc-multilib
 ## Building
 
 To do this, you can build ZMK targeting the
-`native_posix_64` board.
+`native_posix` board.
 
 ```
-west build --pristine --board native_posix_64 -- -DZMK_CONFIG=tests/none/normal/
+west build --pristine --board native_posix
 ```
 
 Once built, you can run the firmware locally:
 
 ```
-./build/zephyr/zmk.exe
+./build/zephyr/zephyr.exe
 ```
 
 ## Virtual Key Events
 
-The virtual key presses are hardcoded in `boards/native_posix_64.overlay` file, should you want to change the sequence to test various actions like Mod-Tap, etc.
+The virtual key presses are hardcoded in `boards/native_posix.overlay` file, should you want to change the sequence to test various actions like Mod-Tap, etc.
